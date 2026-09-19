@@ -1,0 +1,867 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#6C5CE7" />
+  <title>NeoBook | Social journal</title>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>  <script type="text/babel">
+const { useState, useEffect, useMemo, useRef } = React;
+const {
+  Sun, Moon, Search, Bell, LogOut, Send, Trash2, Users, X, Menu,
+  Sparkles, PenSquare, Bookmark, Heart, MessageCircle, ChevronDown, Check
+} = Object.fromEntries([
+  ["Sun", "☼"], ["Moon", "☾"], ["Search", "⌕"], ["Bell", "♢"], ["LogOut", "↪"],
+  ["Send", "➜"], ["Trash2", "×"], ["Users", "♧"], ["X", "×"], ["Menu", "≡"],
+  ["Sparkles", "✦"], ["PenSquare", "✎"], ["Bookmark", "▮"], ["Heart", "♡"],
+  ["MessageCircle", "◌"], ["ChevronDown", "⌄"], ["Check", "✓"]
+].map(([name, glyph]) => [name, ({ size = 17, strokeWidth = 2, ...props }) => (
+  <span aria-hidden="true" {...props} style={{ fontSize: size, lineHeight: 1, fontWeight: strokeWidth > 2 ? 700 : 500 }}>{glyph}</span>
+)]));
+
+/* ---------------------------------- constants ---------------------------------- */
+
+const AVATARS = ["🦊", "🐼", "🐱", "🐶", "🦉", "🐨", "🐧", "🦁", "🐢", "🌸"];
+const COLORS = ["#FF4D6D", "#6C5CE7", "#3DDC97", "#FFC145", "#4EA8DE", "#F76E11", "#9B5DE5", "#00BBF9"];
+const REACTIONS = [
+  { key: "like", emoji: "❤️", label: "Like" },
+  { key: "cheer", emoji: "🎉", label: "Cheer" },
+  { key: "laugh", emoji: "😂", label: "Laugh" },
+  { key: "wow", emoji: "😮", label: "Wow" },
+  { key: "care", emoji: "🤗", label: "Care" },
+];
+const ADJ = ["Wandering", "Curious", "Midnight", "Gentle", "Bold", "Quiet", "Bright", "Lucky", "Hazy", "Amber"];
+const NOUN = ["Fox", "Owl", "Comet", "Willow", "Harbor", "Ember", "Maple", "River", "Sparrow", "Lantern"];
+
+function genId() {
+  try { return crypto.randomUUID(); } catch (e) { return "id-" + Date.now() + "-" + Math.random().toString(36).slice(2); }
+}
+function randomName() {
+  return ADJ[Math.floor(Math.random() * ADJ.length)] + " " + NOUN[Math.floor(Math.random() * NOUN.length)];
+}
+function timeAgo(iso) {
+  const diff = (Date.now() - new Date(iso).getTime()) / 1000;
+  if (diff < 45) return "just now";
+  if (diff < 3600) return Math.floor(diff / 60) + "m";
+  if (diff < 86400) return Math.floor(diff / 3600) + "h";
+  if (diff < 604800) return Math.floor(diff / 86400) + "d";
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function reactionCounts(reactions) {
+  const counts = {};
+  Object.values(reactions || {}).forEach((r) => { counts[r.type] = (counts[r.type] || 0) + 1; });
+  return counts;
+}
+async function safeGet(key, shared) {
+  try {
+    if (window.storage?.get) {
+      const r = await window.storage.get(key, shared);
+      return r ? JSON.parse(r.value) : null;
+    }
+    const value = window.localStorage.getItem((shared ? "shared:" : "local:") + key);
+    return value ? JSON.parse(value) : null;
+  } catch (e) { return null; }
+}
+async function safeSet(key, value, shared) {
+  try {
+    if (window.storage?.set) await window.storage.set(key, JSON.stringify(value), shared);
+    else window.localStorage.setItem((shared ? "shared:" : "local:") + key, JSON.stringify(value));
+    return true;
+  } catch (e) { return false; }
+}
+
+/* ---------------------------------- avatar ---------------------------------- */
+
+function Avatar({ emoji, color, size = 36 }) {
+  return (
+    <div
+      className="nb-avatar"
+      style={{ width: size, height: size, background: color, fontSize: size * 0.55 }}
+    >
+      {emoji}
+    </div>
+  );
+}
+
+/* ---------------------------------- login ---------------------------------- */
+
+function LoginScreen({ onEnter, savedProfile, onContinue }) {
+  const [name, setName] = useState("");
+  const [avatar, setAvatar] = useState(AVATARS[0]);
+  const [color, setColor] = useState(COLORS[0]);
+  const [error, setError] = useState("");
+
+  function handleEnter() {
+    const trimmed = name.trim();
+    if (!trimmed) { setError("Give yourself a name to enter."); return; }
+    onEnter({ id: genId(), name: trimmed.slice(0, 24), avatar, color, joinedAt: new Date().toISOString() });
+  }
+  function handleGuest() {
+    onEnter({
+      id: genId(),
+      name: randomName(),
+      avatar: AVATARS[Math.floor(Math.random() * AVATARS.length)],
+      color: COLORS[Math.floor(Math.random() * COLORS.length)],
+      joinedAt: new Date().toISOString(),
+    });
+  }
+
+  return (
+    <div className="nb-login-wrap">
+      <div className="nb-login-hero">
+        <div className="nb-logo-mark large">N</div>
+        <h1 className="nb-display">NeoBook</h1>
+        <p className="nb-hero-copy">A small, quiet ledger for the people you follow. Write an entry, react to a friend's, then close the book.</p>
+        <div className="nb-hero-stack" aria-hidden="true">
+          <div className="stack-card c1" />
+          <div className="stack-card c2" />
+          <div className="stack-card c3" />
+        </div>
+      </div>
+
+      <div className="nb-login-card">
+        {savedProfile ? (
+          <>
+            <p className="nb-eyebrow">Welcome back</p>
+            <div className="nb-continue-row">
+              <Avatar emoji={savedProfile.avatar} color={savedProfile.color} size={48} />
+              <div>
+                <div className="nb-continue-name">{savedProfile.name}</div>
+                <div className="nb-continue-sub">Your last NeoBook profile</div>
+              </div>
+            </div>
+            <button className="nb-btn primary" onClick={onContinue}>Continue as {savedProfile.name.split(" ")[0]}</button>
+            <div className="nb-divider"><span>or start fresh</span></div>
+          </>
+        ) : (
+          <>
+            <p className="nb-eyebrow">Enter NeoBook</p>
+            <h2 className="nb-login-title">Make a temporary profile</h2>
+          </>
+        )}
+
+        <label className="nb-field-label">Your name</label>
+        <input
+          className="nb-input"
+          value={name}
+          maxLength={24}
+          placeholder="e.g. River Thompson"
+          onChange={(e) => { setName(e.target.value); setError(""); }}
+          onKeyDown={(e) => { if (e.key === "Enter") handleEnter(); }}
+        />
+
+        <label className="nb-field-label">Pick an avatar</label>
+        <div className="nb-swatch-grid">
+          {AVATARS.map((a) => (
+            <button key={a} className={"nb-avatar-choice" + (avatar === a ? " selected" : "")} onClick={() => setAvatar(a)}>
+              {a}
+            </button>
+          ))}
+        </div>
+
+        <label className="nb-field-label">Pick a color</label>
+        <div className="nb-swatch-grid colors">
+          {COLORS.map((c) => (
+            <button key={c} className={"nb-color-choice" + (color === c ? " selected" : "")} style={{ background: c }} onClick={() => setColor(c)}>
+              {color === c && <Check size={14} color="#fff" strokeWidth={3} />}
+            </button>
+          ))}
+        </div>
+
+        {error && <p className="nb-error">{error}</p>}
+
+        <button className="nb-btn primary" onClick={handleEnter}>Enter NeoBook</button>
+        <button className="nb-btn ghost" onClick={handleGuest}>Continue as a random guest</button>
+        <p className="nb-fineprint">No email, no password — this profile lives only in this session and can be left behind anytime with Log out.</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------- post card ---------------------------------- */
+
+function PostCard({ post, currentUser, onReact, onDelete, onToggleSave, isSaved, pickerOpenId, setPickerOpenId, commentsOpenIds, toggleComments, commentDraft, setCommentDraft, onAddComment, confirmDeleteId, setConfirmDeleteId }) {
+  const myReaction = post.reactions ? post.reactions[currentUser.id] : null;
+  const counts = reactionCounts(post.reactions);
+  const totalReactions = Object.values(counts).reduce((a, b) => a + b, 0);
+  const isMine = post.userId === currentUser.id;
+  const commentsOpen = commentsOpenIds.has(post.id);
+  const isPickerOpen = pickerOpenId === post.id;
+  const isConfirming = confirmDeleteId === post.id;
+
+  function submitComment() {
+    const text = (commentDraft[post.id] || "").trim();
+    if (!text) return;
+    onAddComment(post.id, text);
+    setCommentDraft((d) => ({ ...d, [post.id]: "" }));
+  }
+
+  return (
+    <article className="nb-post">
+      <div className="nb-post-header">
+        <Avatar emoji={post.avatar} color={post.color} size={40} />
+        <div className="nb-post-who">
+          <span className="nb-post-name" style={{ color: post.color }}>{post.name}</span>
+          <span className="nb-post-time">{timeAgo(post.createdAt)}</span>
+        </div>
+        <div className="nb-post-actions-top">
+          <button className="nb-icon-btn small" onClick={() => onToggleSave(post.id)} title={isSaved ? "Unsave" : "Save"}>
+            <Bookmark size={16} fill={isSaved ? "currentColor" : "none"} />
+          </button>
+          {isMine && (
+            isConfirming ? (
+              <span className="nb-confirm-row">
+                <button className="nb-text-btn danger" onClick={() => onDelete(post.id)}>Delete</button>
+                <button className="nb-text-btn" onClick={() => setConfirmDeleteId(null)}>Cancel</button>
+              </span>
+            ) : (
+              <button className="nb-icon-btn small" onClick={() => setConfirmDeleteId(post.id)} title="Delete entry">
+                <Trash2 size={16} />
+              </button>
+            )
+          )}
+        </div>
+      </div>
+
+      <p className="nb-post-text">{post.text}</p>
+
+      {totalReactions > 0 && (
+        <div className="nb-reaction-summary">
+          {REACTIONS.filter((r) => counts[r.key]).map((r) => (
+            <span key={r.key} className="nb-summary-pill">{r.emoji} {counts[r.key]}</span>
+          ))}
+        </div>
+      )}
+
+      <div className="nb-post-divider" />
+
+      <div className="nb-post-footer">
+        <div className="nb-reaction-control">
+          <button
+            className={"nb-react-btn" + (myReaction ? " active" : "")}
+            onClick={() => onReact(post.id, myReaction ? myReaction.type : "like")}
+          >
+            <span className="nb-react-emoji">{myReaction ? REACTIONS.find((r) => r.key === myReaction.type).emoji : "🤍"}</span>
+            {myReaction ? REACTIONS.find((r) => r.key === myReaction.type).label : "React"}
+          </button>
+          <button className="nb-icon-btn small picker-toggle" onClick={() => setPickerOpenId(isPickerOpen ? null : post.id)}>
+            <ChevronDown size={14} />
+          </button>
+          {isPickerOpen && (
+            <div className="nb-reaction-popover">
+              {REACTIONS.map((r) => (
+                <button key={r.key} className="nb-stamp" title={r.label} onClick={() => { onReact(post.id, r.key); setPickerOpenId(null); }}>
+                  {r.emoji}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <button className="nb-comment-toggle" onClick={() => toggleComments(post.id)}>
+          <MessageCircle size={16} />
+          {(post.comments || []).length} {(post.comments || []).length === 1 ? "comment" : "comments"}
+        </button>
+      </div>
+
+      {commentsOpen && (
+        <div className="nb-comments-block">
+          {(post.comments || []).length === 0 && <p className="nb-no-comments">No comments yet.</p>}
+          {(post.comments || []).map((c) => (
+            <div className="nb-comment-row" key={c.id}>
+              <Avatar emoji={c.avatar} color={c.color} size={28} />
+              <div className="nb-comment-bubble">
+                <span className="nb-comment-name" style={{ color: c.color }}>{c.name}</span>
+                <span className="nb-comment-text">{c.text}</span>
+                <span className="nb-comment-time">{timeAgo(c.createdAt)}</span>
+              </div>
+            </div>
+          ))}
+          <div className="nb-comment-input-row">
+            <Avatar emoji={currentUser.avatar} color={currentUser.color} size={28} />
+            <input
+              className="nb-comment-input"
+              placeholder="Write a comment…"
+              value={commentDraft[post.id] || ""}
+              onChange={(e) => setCommentDraft((d) => ({ ...d, [post.id]: e.target.value }))}
+              onKeyDown={(e) => { if (e.key === "Enter") submitComment(); }}
+              maxLength={280}
+            />
+            <button className="nb-icon-btn small" onClick={submitComment}><Send size={15} /></button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}
+
+/* ---------------------------------- sidebars ---------------------------------- */
+
+function LeftNav({ currentUser, view, setView, onNavToast, onLogout }) {
+  return (
+    <div className="nb-sidebar-inner">
+      <div className="nb-card nb-profile-card">
+        <Avatar emoji={currentUser.avatar} color={currentUser.color} size={52} />
+        <div className="nb-profile-name">{currentUser.name}</div>
+        <div className="nb-profile-sub">Temporary profile</div>
+      </div>
+      <nav className="nb-card nb-nav-card">
+        <button className={"nb-nav-item" + (view === "feed" ? " active" : "")} onClick={() => setView("feed")}>
+          <Sparkles size={17} /> Feed
+        </button>
+        <button className={"nb-nav-item" + (view === "saved" ? " active" : "")} onClick={() => setView("saved")}>
+          <Bookmark size={17} /> Saved
+        </button>
+        <button className="nb-nav-item disabled" onClick={() => onNavToast("Groups aren't part of this NeoBook yet.")}>
+          <Users size={17} /> Groups <span className="nb-soon">Soon</span>
+        </button>
+        <button className="nb-nav-item disabled" onClick={() => onNavToast("Events aren't part of this NeoBook yet.")}>
+          <PenSquare size={17} /> Events <span className="nb-soon">Soon</span>
+        </button>
+      </nav>
+      <button className="nb-btn ghost logout" onClick={onLogout}><LogOut size={16} /> Log out</button>
+    </div>
+  );
+}
+
+function RightPanel({ members, currentUser, postCount }) {
+  const sorted = [...members].sort((a, b) => new Date(b.lastSeen) - new Date(a.lastSeen));
+  return (
+    <div className="nb-sidebar-inner">
+      <div className="nb-card">
+        <p className="nb-card-title">On NeoBook now</p>
+        <ul className="nb-member-list">
+          {sorted.slice(0, 10).map((m) => (
+            <li key={m.id} className="nb-member-row">
+              <Avatar emoji={m.avatar} color={m.color} size={30} />
+              <div>
+                <div className="nb-member-name">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
+                <div className="nb-member-seen">seen {timeAgo(m.lastSeen)} ago</div>
+              </div>
+            </li>
+          ))}
+          {sorted.length === 0 && <p className="nb-muted">No one else here yet.</p>}
+        </ul>
+      </div>
+      <div className="nb-card nb-about-card">
+        <p className="nb-card-title">About this NeoBook</p>
+        <p className="nb-muted small">{postCount} {postCount === 1 ? "entry" : "entries"} written · {members.length} {members.length === 1 ? "member" : "members"} so far. Everything here is a small shared demo — be kind to the ledger.</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------- notifications ---------------------------------- */
+
+function NotificationsDropdown({ notifications, open, onClose }) {
+  if (!open) return null;
+  return (
+    <div className="nb-notif-dropdown">
+      <p className="nb-card-title">Notifications</p>
+      {notifications.length === 0 && <p className="nb-muted small">Nothing yet — reactions and comments on your entries will show up here.</p>}
+      {notifications.map((n) => (
+        <div key={n.id} className="nb-notif-row">
+          <Avatar emoji={n.avatar} color="#88839c" size={26} />
+          <div className="nb-notif-text">
+            <strong>{n.name}</strong>{" "}
+            {n.type === "reaction" ? <>reacted {REACTIONS.find((r) => r.key === n.reactionType)?.emoji || ""} to your entry</> : <>commented "{n.commentText.slice(0, 60)}{n.commentText.length > 60 ? "…" : ""}"</>}
+            <div className="nb-notif-time">{timeAgo(n.at)} ago</div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------------------------- main app ---------------------------------- */
+
+function NeoBook() {
+  const [theme, setTheme] = useState("light");
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [savedProfileHint, setSavedProfileHint] = useState(null);
+  const [posts, setPosts] = useState([]);
+  const [members, setMembers] = useState([]);
+  const [savedIds, setSavedIds] = useState([]);
+  const [composerText, setComposerText] = useState("");
+  const [posting, setPosting] = useState(false);
+  const [query, setQuery] = useState("");
+  const [view, setView] = useState("feed");
+  const [pickerOpenId, setPickerOpenId] = useState(null);
+  const [commentsOpenIds, setCommentsOpenIds] = useState(new Set());
+  const [commentDraft, setCommentDraft] = useState({});
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [toast, setToast] = useState("");
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [leftDrawerOpen, setLeftDrawerOpen] = useState(false);
+  const [rightDrawerOpen, setRightDrawerOpen] = useState(false);
+  const toastTimer = useRef(null);
+
+  function showToast(msg) {
+    setToast(msg);
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(""), 3200);
+  }
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      const savedTheme = await safeGet("theme", false);
+      if (savedTheme) setTheme(savedTheme);
+
+      const p = (await safeGet("posts", true)) || [];
+      setPosts(p);
+      const m = (await safeGet("members", true)) || [];
+      setMembers(m);
+      const s = (await safeGet("saved", false)) || [];
+      setSavedIds(s);
+
+      const profile = await safeGet("profile", false);
+      if (profile) setSavedProfileHint(profile);
+      setLoading(false);
+    })();
+  }, []);
+
+  async function upsertMember(profile) {
+    const latest = (await safeGet("members", true)) || [];
+    const idx = latest.findIndex((m) => m.id === profile.id);
+    const entry = { id: profile.id, name: profile.name, avatar: profile.avatar, color: profile.color, lastSeen: new Date().toISOString() };
+    if (idx >= 0) latest[idx] = entry; else latest.unshift(entry);
+    await safeSet("members", latest, true);
+    setMembers(latest);
+  }
+
+  async function handleEnter(profile) {
+    setCurrentUser(profile);
+    await safeSet("profile", profile, false);
+    await upsertMember(profile);
+  }
+
+  async function handleContinue() {
+    if (!savedProfileHint) return;
+    setCurrentUser(savedProfileHint);
+    await upsertMember(savedProfileHint);
+  }
+
+  async function handleLogout() {
+    setCurrentUser(null);
+    setSavedProfileHint(null);
+    try {
+      if (window.storage?.delete) await window.storage.delete("profile", false);
+      else window.localStorage.removeItem("local:profile");
+    } catch (e) {}
+  }
+
+  async function toggleTheme() {
+    const next = theme === "light" ? "dark" : "light";
+    setTheme(next);
+    await safeSet("theme", next, false);
+  }
+
+  async function handlePost() {
+    const text = composerText.trim();
+    if (!text || !currentUser) return;
+    setPosting(true);
+    const newPost = {
+      id: genId(), userId: currentUser.id, name: currentUser.name, avatar: currentUser.avatar, color: currentUser.color,
+      text, createdAt: new Date().toISOString(), reactions: {}, comments: [],
+    };
+    const latest = (await safeGet("posts", true)) || posts;
+    const updated = [newPost, ...latest];
+    const ok = await safeSet("posts", updated, true);
+    if (ok) { setPosts(updated); setComposerText(""); } else { showToast("Couldn't publish that entry. Try again."); }
+    setPosting(false);
+  }
+
+  async function handleReact(postId, key) {
+    if (!currentUser) return;
+    const latest = (await safeGet("posts", true)) || posts;
+    const updated = latest.map((p) => {
+      if (p.id !== postId) return p;
+      const reactions = { ...(p.reactions || {}) };
+      if (reactions[currentUser.id] && reactions[currentUser.id].type === key) {
+        delete reactions[currentUser.id];
+      } else {
+        reactions[currentUser.id] = { type: key, name: currentUser.name, avatar: currentUser.avatar, at: new Date().toISOString() };
+      }
+      return { ...p, reactions };
+    });
+    const ok = await safeSet("posts", updated, true);
+    if (ok) setPosts(updated); else showToast("Reaction didn't save.");
+  }
+
+  async function handleAddComment(postId, text) {
+    if (!currentUser) return;
+    const latest = (await safeGet("posts", true)) || posts;
+    const updated = latest.map((p) => p.id === postId
+      ? { ...p, comments: [...(p.comments || []), { id: genId(), userId: currentUser.id, name: currentUser.name, avatar: currentUser.avatar, color: currentUser.color, text, createdAt: new Date().toISOString() }] }
+      : p);
+    const ok = await safeSet("posts", updated, true);
+    if (ok) setPosts(updated); else showToast("Comment didn't save.");
+  }
+
+  async function handleDelete(postId) {
+    const latest = (await safeGet("posts", true)) || posts;
+    const updated = latest.filter((p) => p.id !== postId);
+    const ok = await safeSet("posts", updated, true);
+    if (ok) { setPosts(updated); setConfirmDeleteId(null); } else showToast("Couldn't delete that entry.");
+  }
+
+  async function handleToggleSave(postId) {
+    const has = savedIds.includes(postId);
+    const updated = has ? savedIds.filter((id) => id !== postId) : [...savedIds, postId];
+    setSavedIds(updated);
+    await safeSet("saved", updated, false);
+  }
+
+  function toggleComments(postId) {
+    setCommentsOpenIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(postId)) next.delete(postId); else next.add(postId);
+      return next;
+    });
+  }
+
+  const notifications = useMemo(() => {
+    if (!currentUser) return [];
+    const items = [];
+    posts.forEach((p) => {
+      if (p.userId !== currentUser.id) return;
+      Object.entries(p.reactions || {}).forEach(([uid, r]) => {
+        if (uid === currentUser.id) return;
+        items.push({ id: "r-" + p.id + "-" + uid, type: "reaction", reactionType: r.type, name: r.name, avatar: r.avatar, at: r.at });
+      });
+      (p.comments || []).forEach((c) => {
+        if (c.userId === currentUser.id) return;
+        items.push({ id: "c-" + c.id, type: "comment", name: c.name, avatar: c.avatar, commentText: c.text, at: c.createdAt });
+      });
+    });
+    items.sort((a, b) => new Date(b.at) - new Date(a.at));
+    return items.slice(0, 15);
+  }, [posts, currentUser]);
+
+  const filteredPosts = useMemo(() => {
+    let list = posts;
+    if (view === "saved") list = list.filter((p) => savedIds.includes(p.id));
+    if (query.trim()) {
+      const q = query.trim().toLowerCase();
+      list = list.filter((p) => p.text.toLowerCase().includes(q) || p.name.toLowerCase().includes(q));
+    }
+    return [...list].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }, [posts, view, savedIds, query]);
+
+  const styles = `
+    @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+    .nb-root { --font-display:'Fraunces',Georgia,serif; --font-body:'Inter',system-ui,sans-serif; --font-mono:'IBM Plex Mono',monospace; font-family:var(--font-body); min-height:100vh; background:var(--bg); color:var(--ink); transition:background .25s ease,color .25s ease; }
+    .nb-root[data-theme='light'] { --bg:#F3F0FA; --bg-elev:#FFFFFF; --bg-sunken:#EAE6F6; --ink:#1C1830; --ink-soft:#5D5678; --line:rgba(28,24,48,0.12); --accent:#FF4D6D; --accent-2:#189C6E; --accent-3:#6C5CE7; --shadow:0 1px 2px rgba(28,24,48,.06),0 10px 26px -14px rgba(28,24,48,.22); }
+    .nb-root[data-theme='dark'] { --bg:#131020; --bg-elev:#1E1A30; --bg-sunken:#191527; --ink:#F1EEFB; --ink-soft:#A69FC4; --line:rgba(241,238,251,0.10); --accent:#FF6B85; --accent-2:#3DDC97; --accent-3:#8B7CF6; --shadow:0 1px 2px rgba(0,0,0,.35),0 14px 32px -16px rgba(0,0,0,.65); }
+    .nb-root * { box-sizing:border-box; }
+    .nb-display { font-family:var(--font-display); }
+    .nb-muted { color:var(--ink-soft); }
+    .nb-muted.small { font-size:12.5px; line-height:1.5; }
+
+    /* navbar */
+    .nb-navbar { position:sticky; top:0; z-index:30; display:flex; align-items:center; gap:14px; padding:10px 20px; background:var(--bg-elev); border-bottom:1px solid var(--line); }
+    .nb-logo-row { display:flex; align-items:center; gap:8px; cursor:default; }
+    .nb-logo-mark { width:32px; height:32px; border-radius:9px; background:var(--accent-3); color:#fff; display:flex; align-items:center; justify-content:center; font-family:var(--font-display); font-weight:700; font-size:17px; flex-shrink:0; }
+    .nb-logo-mark.large { width:56px; height:56px; border-radius:14px; font-size:28px; margin-bottom:14px; }
+    .nb-wordmark { font-family:var(--font-display); font-weight:600; font-size:19px; letter-spacing:-0.01em; }
+    .nb-search-wrap { flex:1; max-width:420px; display:flex; align-items:center; gap:8px; background:var(--bg-sunken); border-radius:10px; padding:8px 12px; color:var(--ink-soft); }
+    .nb-search-wrap input { border:none; background:transparent; outline:none; color:var(--ink); font-family:var(--font-body); font-size:14px; width:100%; }
+    .nb-navbar-right { display:flex; align-items:center; gap:6px; margin-left:auto; position:relative; }
+    .nb-icon-btn { border:1px solid var(--line); background:var(--bg-elev); color:var(--ink); width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center; cursor:pointer; transition:transform .15s ease, background .15s ease; position:relative; }
+    .nb-icon-btn:hover { background:var(--bg-sunken); transform:translateY(-1px); }
+    .nb-icon-btn.small { width:30px; height:30px; border-radius:8px; }
+    .nb-badge-dot { position:absolute; top:-3px; right:-3px; width:9px; height:9px; border-radius:50%; background:var(--accent); border:2px solid var(--bg-elev); }
+    .nb-mobile-only { display:none; }
+
+    /* layout */
+    .nb-main-grid { display:grid; grid-template-columns:232px minmax(0,600px) 272px; gap:22px; max-width:1180px; margin:0 auto; padding:22px 16px 60px; align-items:start; }
+    .nb-sidebar-inner { position:sticky; top:74px; display:flex; flex-direction:column; gap:14px; }
+    .nb-center-col { min-width:0; display:flex; flex-direction:column; gap:16px; }
+
+    .nb-card { background:var(--bg-elev); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:var(--shadow); }
+    .nb-card-title { font-weight:600; font-size:13.5px; margin:0 0 10px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); }
+
+    .nb-profile-card { display:flex; flex-direction:column; align-items:center; text-align:center; gap:6px; padding:22px 16px; }
+    .nb-profile-name { font-weight:600; font-size:15.5px; margin-top:4px; }
+    .nb-profile-sub { font-size:12.5px; color:var(--ink-soft); font-family:var(--font-mono); }
+
+    .nb-nav-card { display:flex; flex-direction:column; gap:2px; padding:8px; }
+    .nb-nav-item { display:flex; align-items:center; gap:10px; padding:10px 10px; border-radius:9px; border:none; background:transparent; color:var(--ink); font-size:14.5px; font-family:var(--font-body); cursor:pointer; text-align:left; }
+    .nb-nav-item:hover { background:var(--bg-sunken); }
+    .nb-nav-item.active { background:var(--bg-sunken); font-weight:600; color:var(--accent-3); }
+    .nb-nav-item.disabled { color:var(--ink-soft); }
+    .nb-soon { margin-left:auto; font-size:10px; font-family:var(--font-mono); background:var(--bg-sunken); padding:2px 6px; border-radius:6px; }
+
+    .nb-btn { border-radius:10px; padding:11px 16px; font-family:var(--font-body); font-weight:600; font-size:14px; cursor:pointer; border:1px solid transparent; width:100%; display:flex; align-items:center; justify-content:center; gap:8px; }
+    .nb-btn.primary { background:var(--accent-3); color:#fff; margin-top:6px; }
+    .nb-btn.primary:hover { filter:brightness(1.06); }
+    .nb-btn.ghost { background:transparent; border-color:var(--line); color:var(--ink); margin-top:8px; }
+    .nb-btn.ghost:hover { background:var(--bg-sunken); }
+    .nb-btn.logout { color:var(--accent); border-color:var(--line); }
+
+    .nb-member-list { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:11px; }
+    .nb-member-row { display:flex; align-items:center; gap:10px; }
+    .nb-member-name { font-size:13.5px; font-weight:600; }
+    .nb-member-seen { font-size:11.5px; color:var(--ink-soft); font-family:var(--font-mono); }
+
+    .nb-avatar { border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+
+    /* composer */
+    .nb-composer { display:flex; gap:12px; }
+    .nb-composer-body { flex:1; display:flex; flex-direction:column; gap:10px; }
+    .nb-composer textarea { resize:none; border:1px dashed var(--line); border-radius:12px; background:var(--bg-sunken); padding:12px 14px; font-family:var(--font-body); font-size:14.5px; color:var(--ink); outline:none; min-height:64px; }
+    .nb-composer textarea:focus { border-color:var(--accent-3); }
+    .nb-composer-footer { display:flex; align-items:center; justify-content:space-between; }
+    .nb-char-count { font-size:11.5px; font-family:var(--font-mono); color:var(--ink-soft); }
+    .nb-post-btn { background:var(--accent-3); color:#fff; border:none; border-radius:9px; padding:9px 18px; font-weight:600; font-size:13.5px; cursor:pointer; }
+    .nb-post-btn:disabled { opacity:.45; cursor:default; }
+
+    /* posts */
+    .nb-post { background:var(--bg-elev); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:var(--shadow); animation:nbFadeUp .35s ease both; }
+    .nb-post-header { display:flex; align-items:center; gap:10px; }
+    .nb-post-who { display:flex; flex-direction:column; margin-right:auto; }
+    .nb-post-name { font-weight:600; font-size:14.5px; }
+    .nb-post-time { font-size:11.5px; color:var(--ink-soft); font-family:var(--font-mono); }
+    .nb-post-actions-top { display:flex; align-items:center; gap:4px; }
+    .nb-post-text { margin:12px 0 8px; font-size:15px; line-height:1.55; white-space:pre-wrap; }
+    .nb-post-divider { border-top:1px dashed var(--line); margin:10px 0 8px; }
+    .nb-reaction-summary { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:4px; }
+    .nb-summary-pill { font-size:12px; background:var(--bg-sunken); border-radius:20px; padding:3px 9px; font-family:var(--font-mono); }
+
+    .nb-post-footer { display:flex; align-items:center; justify-content:space-between; }
+    .nb-reaction-control { position:relative; display:flex; align-items:center; gap:2px; }
+    .nb-react-btn { display:flex; align-items:center; gap:7px; border:1px solid var(--line); background:var(--bg-elev); border-radius:20px; padding:7px 13px; font-size:13.5px; font-weight:600; color:var(--ink-soft); cursor:pointer; }
+    .nb-react-btn:hover { background:var(--bg-sunken); }
+    .nb-react-btn.active { color:var(--accent); border-color:var(--accent); }
+    .nb-react-emoji { font-size:15px; }
+    .picker-toggle { border-radius:8px; }
+    .nb-reaction-popover { position:absolute; bottom:calc(100% + 8px); left:0; display:flex; gap:4px; background:var(--bg-elev); border:1px solid var(--line); border-radius:24px; padding:6px; box-shadow:var(--shadow); z-index:10; animation:nbPop .15s ease both; }
+    .nb-stamp { width:36px; height:36px; border-radius:50%; border:1px solid transparent; background:transparent; font-size:19px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .nb-stamp:hover { background:var(--bg-sunken); transform:scale(1.12); border-color:var(--line); }
+    .nb-comment-toggle { display:flex; align-items:center; gap:6px; background:transparent; border:none; color:var(--ink-soft); font-size:13.5px; font-weight:600; cursor:pointer; }
+    .nb-comment-toggle:hover { color:var(--ink); }
+
+    .nb-comments-block { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); display:flex; flex-direction:column; gap:10px; }
+    .nb-no-comments { font-size:13px; color:var(--ink-soft); margin:0; }
+    .nb-comment-row { display:flex; gap:9px; align-items:flex-start; }
+    .nb-comment-bubble { background:var(--bg-sunken); border-radius:12px; padding:8px 12px; font-size:13.5px; display:flex; flex-direction:column; gap:2px; }
+    .nb-comment-name { font-weight:600; font-size:12.5px; }
+    .nb-comment-time { font-size:10.5px; color:var(--ink-soft); font-family:var(--font-mono); }
+    .nb-comment-input-row { display:flex; align-items:center; gap:9px; }
+    .nb-comment-input { flex:1; border:1px solid var(--line); background:var(--bg-sunken); border-radius:20px; padding:8px 14px; font-size:13.5px; outline:none; color:var(--ink); }
+    .nb-comment-input:focus { border-color:var(--accent-3); }
+
+    .nb-text-btn { background:none; border:none; font-size:12.5px; font-weight:600; cursor:pointer; color:var(--ink-soft); padding:4px 6px; }
+    .nb-text-btn.danger { color:var(--accent); }
+    .nb-confirm-row { display:flex; gap:2px; align-items:center; }
+
+    .nb-empty-state { border:1px dashed var(--line); border-radius:14px; padding:40px 20px; text-align:center; color:var(--ink-soft); }
+    .nb-empty-state svg { margin-bottom:10px; }
+
+    /* notifications */
+    .nb-notif-dropdown { position:absolute; top:calc(100% + 8px); right:0; width:300px; max-height:380px; overflow-y:auto; background:var(--bg-elev); border:1px solid var(--line); border-radius:14px; padding:14px; box-shadow:var(--shadow); z-index:40; animation:nbPop .15s ease both; }
+    .nb-notif-row { display:flex; gap:9px; padding:8px 0; border-top:1px solid var(--line); }
+    .nb-notif-row:first-of-type { border-top:none; }
+    .nb-notif-text { font-size:13px; line-height:1.4; }
+    .nb-notif-time { font-size:11px; color:var(--ink-soft); font-family:var(--font-mono); margin-top:2px; }
+
+    /* login */
+    .nb-login-wrap { min-height:100vh; display:grid; grid-template-columns:1fr 420px; align-items:center; gap:40px; padding:40px; max-width:1180px; margin:0 auto; }
+    .nb-login-hero { padding:20px; }
+    .nb-hero-copy { color:var(--ink-soft); font-size:16px; line-height:1.6; max-width:420px; margin-top:10px; }
+    .nb-hero-stack { position:relative; height:120px; margin-top:36px; }
+    .stack-card { position:absolute; width:200px; height:110px; border-radius:14px; border:1px solid var(--line); background:var(--bg-elev); box-shadow:var(--shadow); }
+    .stack-card.c1 { transform:rotate(-6deg); left:0; top:10px; background:var(--bg-sunken); }
+    .stack-card.c2 { transform:rotate(3deg); left:60px; top:0; }
+    .stack-card.c3 { transform:rotate(-2deg); left:120px; top:16px; background:var(--accent-3); opacity:.15; }
+    .nb-login-card { background:var(--bg-elev); border:1px solid var(--line); border-radius:18px; padding:28px; box-shadow:var(--shadow); }
+    .nb-eyebrow { font-family:var(--font-mono); font-size:11.5px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent-3); margin:0 0 6px; }
+    .nb-login-title { font-family:var(--font-display); font-size:22px; margin:0 0 18px; }
+    .nb-field-label { display:block; font-size:12.5px; font-weight:600; color:var(--ink-soft); margin:16px 0 6px; }
+    .nb-input { width:100%; border:1px solid var(--line); background:var(--bg-sunken); border-radius:10px; padding:11px 13px; font-size:14.5px; color:var(--ink); outline:none; }
+    .nb-input:focus { border-color:var(--accent-3); }
+    .nb-swatch-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:8px; }
+    .nb-avatar-choice { aspect-ratio:1; border-radius:10px; border:1px solid var(--line); background:var(--bg-sunken); font-size:19px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .nb-avatar-choice.selected { border-color:var(--accent-3); background:var(--bg-elev); box-shadow:0 0 0 2px var(--accent-3) inset; }
+    .nb-color-choice { aspect-ratio:1; border-radius:10px; border:1px solid var(--line); cursor:pointer; display:flex; align-items:center; justify-content:center; }
+    .nb-color-choice.selected { box-shadow:0 0 0 2px var(--bg-elev), 0 0 0 4px var(--accent-3); }
+    .nb-error { color:var(--accent); font-size:12.5px; margin:10px 0 0; }
+    .nb-continue-row { display:flex; align-items:center; gap:12px; margin-bottom:16px; }
+    .nb-continue-name { font-weight:600; font-size:15px; }
+    .nb-continue-sub { font-size:12px; color:var(--ink-soft); }
+    .nb-divider { display:flex; align-items:center; gap:10px; margin:20px 0 4px; color:var(--ink-soft); font-size:12px; }
+    .nb-divider::before, .nb-divider::after { content:''; flex:1; border-top:1px dashed var(--line); }
+    .nb-fineprint { font-size:11.5px; color:var(--ink-soft); line-height:1.5; margin-top:14px; }
+
+    .nb-toast { position:fixed; bottom:22px; left:50%; transform:translateX(-50%); background:var(--ink); color:var(--bg); padding:10px 18px; border-radius:20px; font-size:13.5px; z-index:100; box-shadow:var(--shadow); animation:nbPop .18s ease both; }
+
+    .nb-loading-wrap { min-height:100vh; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:10px; color:var(--ink-soft); font-family:var(--font-mono); font-size:13px; }
+
+    .nb-drawer-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:48; }
+    .nb-drawer { position:fixed; top:0; bottom:0; width:280px; background:var(--bg); z-index:49; padding:16px; overflow-y:auto; animation:nbSlide .2s ease both; }
+    .nb-drawer.left { left:0; }
+    .nb-drawer.right { right:0; }
+    .nb-drawer-close { margin-bottom:14px; }
+
+    @keyframes nbFadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes nbPop { from { opacity:0; transform:scale(.96); } to { opacity:1; transform:scale(1); } }
+    @keyframes nbSlide { from { opacity:0; transform:translateX(-6px); } to { opacity:1; transform:translateX(0); } }
+    @media (prefers-reduced-motion: reduce) { .nb-post, .nb-reaction-popover, .nb-toast, .nb-notif-dropdown, .nb-drawer { animation:none !important; } }
+
+    @media (max-width: 980px) {
+      .nb-main-grid { grid-template-columns:1fr; }
+      .nb-col-left, .nb-col-right { display:none; }
+      .nb-mobile-only { display:flex; }
+      .nb-search-wrap { display:none; }
+      .nb-login-wrap { grid-template-columns:1fr; padding:24px; }
+      .nb-hero-stack { display:none; }
+    }
+  `;
+
+  if (loading) {
+    return (
+      <div className={"nb-root"} data-theme={theme}>
+        <style>{styles}</style>
+        <div className="nb-loading-wrap">
+          <div className="nb-logo-mark">N</div>
+          Opening the ledger…
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentUser) {
+    return (
+      <div className="nb-root" data-theme={theme}>
+        <style>{styles}</style>
+        <LoginScreen onEnter={handleEnter} savedProfile={savedProfileHint} onContinue={handleContinue} />
+      </div>
+    );
+  }
+
+  const isSaved = (id) => savedIds.includes(id);
+
+  return (
+    <div className="nb-root" data-theme={theme}>
+      <style>{styles}</style>
+
+      <header className="nb-navbar">
+        <button className="nb-icon-btn nb-mobile-only" onClick={() => setLeftDrawerOpen(true)}><Menu size={17} /></button>
+        <div className="nb-logo-row">
+          <div className="nb-logo-mark">N</div>
+          <span className="nb-wordmark">NeoBook</span>
+        </div>
+        <div className="nb-search-wrap">
+          <Search size={15} />
+          <input placeholder="Search entries or people…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        </div>
+        <div className="nb-navbar-right">
+          <button className="nb-icon-btn nb-mobile-only" onClick={() => setRightDrawerOpen(true)}><Users size={17} /></button>
+          <button className="nb-icon-btn" onClick={toggleTheme} title="Toggle theme">
+            {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+          </button>
+          <div style={{ position: "relative" }}>
+            <button className="nb-icon-btn" onClick={() => setNotifOpen((v) => !v)} title="Notifications">
+              <Bell size={17} />
+              {notifications.length > 0 && <span className="nb-badge-dot" />}
+            </button>
+            <NotificationsDropdown notifications={notifications} open={notifOpen} onClose={() => setNotifOpen(false)} />
+          </div>
+          <Avatar emoji={currentUser.avatar} color={currentUser.color} size={34} />
+        </div>
+      </header>
+
+      <div className="nb-main-grid">
+        <div className="nb-col-left">
+          <LeftNav currentUser={currentUser} view={view} setView={setView} onNavToast={showToast} onLogout={handleLogout} />
+        </div>
+
+        <div className="nb-center-col">
+          <div className="nb-card nb-composer">
+            <Avatar emoji={currentUser.avatar} color={currentUser.color} size={40} />
+            <div className="nb-composer-body">
+              <textarea
+                placeholder={`What's worth writing down, ${currentUser.name.split(" ")[0]}?`}
+                value={composerText}
+                maxLength={500}
+                onChange={(e) => setComposerText(e.target.value)}
+              />
+              <div className="nb-composer-footer">
+                <span className="nb-char-count">{composerText.length > 400 ? `${500 - composerText.length} left` : ""}</span>
+                <button className="nb-post-btn" disabled={!composerText.trim() || posting} onClick={handlePost}>
+                  {posting ? "Publishing…" : "Post entry"}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {filteredPosts.length === 0 && (
+            <div className="nb-empty-state">
+              <PenSquare size={26} />
+              <p>{view === "saved" ? "You haven't saved any entries yet." : query ? "No entries match that search." : "The feed is quiet. Write the first entry."}</p>
+            </div>
+          )}
+
+          {filteredPosts.map((post) => (
+            <PostCard
+              key={post.id}
+              post={post}
+              currentUser={currentUser}
+              onReact={handleReact}
+              onDelete={handleDelete}
+              onToggleSave={handleToggleSave}
+              isSaved={isSaved(post.id)}
+              pickerOpenId={pickerOpenId}
+              setPickerOpenId={setPickerOpenId}
+              commentsOpenIds={commentsOpenIds}
+              toggleComments={toggleComments}
+              commentDraft={commentDraft}
+              setCommentDraft={setCommentDraft}
+              onAddComment={handleAddComment}
+              confirmDeleteId={confirmDeleteId}
+              setConfirmDeleteId={setConfirmDeleteId}
+            />
+          ))}
+        </div>
+
+        <div className="nb-col-right">
+          <RightPanel members={members} currentUser={currentUser} postCount={posts.length} />
+        </div>
+      </div>
+
+      {leftDrawerOpen && (
+        <>
+          <div className="nb-drawer-backdrop" onClick={() => setLeftDrawerOpen(false)} />
+          <div className="nb-drawer left">
+            <button className="nb-icon-btn drawer-close" onClick={() => setLeftDrawerOpen(false)}><X size={17} /></button>
+            <LeftNav currentUser={currentUser} view={view} setView={(v) => { setView(v); setLeftDrawerOpen(false); }} onNavToast={showToast} onLogout={handleLogout} />
+          </div>
+        </>
+      )}
+      {rightDrawerOpen && (
+        <>
+          <div className="nb-drawer-backdrop" onClick={() => setRightDrawerOpen(false)} />
+          <div className="nb-drawer right">
+            <button className="nb-icon-btn drawer-close" onClick={() => setRightDrawerOpen(false)}><X size={17} /></button>
+            <RightPanel members={members} currentUser={currentUser} postCount={posts.length} />
+          </div>
+        </>
+      )}
+
+      {toast && <div className="nb-toast">{toast}</div>}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<NeoBook />);
+  </script>
+</body>
+</html>
